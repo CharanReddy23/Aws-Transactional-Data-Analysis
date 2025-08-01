@@ -1,1 +1,207 @@
+Transactions_etl.py
+
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame, DynamicFrameCollection
+from pyspark.sql.functions import regexp_replace, col, when, trim
+
+
+# Glue Job Initialization
+
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+# Transformation Function
+
+def MyTransform(glueContext, dfc) -> DynamicFrameCollection:
+    """Cleans transaction data: remove '$', fill errors, and replace null merchant_state with mode."""
+    
+    # Extract first DynamicFrame and convert to DataFrame
+    dynamic_frame = dfc.select(list(dfc.keys())[0])
+    df = dynamic_frame.toDF()
+
+    # Remove '$' sign in amount
+    df = df.withColumn("amount", regexp_replace(col("amount"), "[$]", ""))
+
+    # Fill null/empty 'errors' with "ERRORLESS"
+    df = df.withColumn(
+        "errors",
+        when((col("errors").isNull()) | (trim(col("errors")) == ""), "ERRORLESS").otherwise(col("errors"))
+    )
+
+    # Calculate mode of merchant_state
+    mode_df = df.groupBy("merchant_state").count().orderBy(col("count").desc()).limit(1)
+    mode_row = mode_df.collect()
+    mode_value = mode_row[0]["merchant_state"] if mode_row else "UNKNOWN"
+
+    # Replace null or empty merchant_state with mode
+    df = df.withColumn(
+        "merchant_state",
+        when(
+            (col("merchant_state").isNull()) |
+            (trim(col("merchant_state")) == "") |
+            (col("merchant_state").isin("None", "NA", "null")),
+            mode_value
+        ).otherwise(col("merchant_state"))
+    )
+
+    # Convert back to DynamicFrame
+    transformed_dynamic_frame = DynamicFrame.fromDF(df, glueContext, "transformed_df")
+    return DynamicFrameCollection({"transformed": transformed_dynamic_frame}, glueContext)
+
+# Read → Transform → Write
+
+input_frame = glueContext.create_dynamic_frame.from_catalog(
+    database="transactional_result_data",
+    table_name="transactions_data_csv"
+)
+
+transformed_collection = MyTransform(glueContext, DynamicFrameCollection(
+    {"input_frame": input_frame}, glueContext
+))
+transformed_frame = SelectFromCollection.apply(
+    dfc=transformed_collection,
+    key=list(transformed_collection.keys())[0]
+)
+
+glueContext.write_dynamic_frame.from_catalog(
+    frame=transformed_frame,
+    database="transactional_result_data",
+    table_name="transactions_data_csv",
+    additional_options={"enableUpdateCatalog": True, "updateBehavior": "UPDATE_IN_DATABASE"}
+)
+
+job.commit()
+
+Financial_transactions_etl.py
+
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame, DynamicFrameCollection
+from pyspark.sql.functions import regexp_replace, col, when, trim
+
+# Glue Job Initialization
+
+
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+# Transformation Function
+
+def MyTransform(glueContext, dfc) -> DynamicFrameCollection:
+    """Cleans financial transactions: remove '$' and fill errors."""
+    
+    dynamic_frame = dfc.select(list(dfc.keys())[0])
+    df = dynamic_frame.toDF()
+
+    # Remove '$' in amount
+    df = df.withColumn("amount", regexp_replace(col("amount"), "[$]", ""))
+
+    # Fill null or empty errors
+    df = df.withColumn(
+        "errors",
+        when((col("errors").isNull()) | (trim(col("errors")) == ""), "ERRORLESS").otherwise(col("errors"))
+    )
+
+    transformed_dynamic_frame = DynamicFrame.fromDF(df, glueContext, "transformed_df")
+    return DynamicFrameCollection({"transformed": transformed_dynamic_frame}, glueContext)
+
+# Read → Transform → Write
+
+input_frame = glueContext.create_dynamic_frame.from_catalog(
+    database="transactional_result_data",
+    table_name="financial_transactions_csv"
+)
+
+transformed_collection = MyTransform(glueContext, DynamicFrameCollection(
+    {"input_frame": input_frame}, glueContext
+))
+transformed_frame = SelectFromCollection.apply(
+    dfc=transformed_collection,
+    key=list(transformed_collection.keys())[0]
+)
+
+glueContext.write_dynamic_frame.from_catalog(
+    frame=transformed_frame,
+    database="transactional_result_data",
+    table_name="financial_transactions_csv",
+    additional_options={"enableUpdateCatalog": True, "updateBehavior": "UPDATE_IN_DATABASE"}
+)
+
+job.commit()
+
+Cards_etl.py
+
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame, DynamicFrameCollection
+from pyspark.sql.functions import regexp_replace, col
+
+
+# Glue Job Initialization
+
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+# Transformation Function
+
+def MyTransform(glueContext, dfc) -> DynamicFrameCollection:
+    """Cleans card data: remove '$' in credit_limit."""
+    
+    dynamic_frame = dfc.select(list(dfc.keys())[0])
+    df = dynamic_frame.toDF()
+
+    # Remove '$' sign in credit_limit
+    df = df.withColumn("credit_limit", regexp_replace(col("credit_limit"), "[$]", ""))
+
+    transformed_dynamic_frame = DynamicFrame.fromDF(df, glueContext, "transformed_df")
+    return DynamicFrameCollection({"transformed": transformed_dynamic_frame}, glueContext)
+
+# Read → Transform → Write
+
+input_frame = glueContext.create_dynamic_frame.from_catalog(
+    database="transactional_result_data",
+    table_name="cards_data_csv"
+)
+
+transformed_collection = MyTransform(glueContext, DynamicFrameCollection(
+    {"input_frame": input_frame}, glueContext
+))
+transformed_frame = SelectFromCollection.apply(
+    dfc=transformed_collection,
+    key=list(transformed_collection.keys())[0]
+)
+
+glueContext.write_dynamic_frame.from_catalog(
+    frame=transformed_frame,
+    database="transactional_result_data",
+    table_name="cards_data_csv",
+    additional_options={"enableUpdateCatalog": True, "updateBehavior": "UPDATE_IN_DATABASE"}
+)
+
+job.commit()
 
